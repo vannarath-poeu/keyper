@@ -1,0 +1,10 @@
+torch
+transformers
+datasets
+jupyterlab
+rouge-score
+ipykernel
+scikit-learn
+matplotlib
+torchsummary
+pandas
