@@ -2,6 +2,7 @@ accelerate
 datasets
 gensim
 matplotlib
+keybert
 nltk
 numpy
 pandas
