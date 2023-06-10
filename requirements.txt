@@ -2,7 +2,8 @@ accelerate
 datasets
 gensim
 matplotlib
-keybert
+keybert[spacy]
+networkx[default]
 nltk
 numpy
 pandas
