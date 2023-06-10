@@ -31,7 +31,6 @@ def list_jsonl(path):
 
 def keybart(generator, doc, top_n=10):
     keyphrases = generator(doc)[0][:top_n]
-    print(keyphrases)
     return keyphrases
 
 def fscore(precision: float, recall: float):
@@ -94,7 +93,7 @@ def stem_keywords(keyword_list: list):
         stemmed_keywords.append(stemmed)
     return stemmed_keywords
 
-def pke_score(
+def keybart_score(
     dataset_name: str,
     data_path: str,
     output_path: str,
@@ -123,7 +122,7 @@ def pke_score(
             for k in ["abstractive", "extractive", "combined"]
         }
 
-        num_docs = 10 # len(test)
+        num_docs = len(test)
 
         model_name = "bloomberg/KeyBART"
         generator = KeyphraseGenerationPipeline(model_name=model_name, truncation=True)
@@ -197,7 +196,7 @@ def pke_score(
 
 
 if __name__ == "__main__":
-    # Example: python3 src/00-load_data.py --dataset midas/kp20k --subset raw
+    # Example: python3 src/02-keybart.py --dataset midas/kp20k
     # Or python3 src/02-keybart.py --dataset midas/ldkp3k
     # Or python3 src/02-keybart.py --dataset midas/inspec
     # Or python3 src/02-keybart.py --dataset midas/semeval2010
@@ -215,4 +214,4 @@ if __name__ == "__main__":
     data_path = args.data
     output_path = args.output
 
-    pke_score(dataset_name, data_path, output_path)
+    keybart_score(dataset_name, data_path, output_path)
