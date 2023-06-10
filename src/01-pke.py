@@ -111,7 +111,7 @@ def pke_score(
             for k in ["abstractive", "extractive", "combined"]
         }
 
-        num_docs = 10 # len(test)
+        num_docs = len(test)
 
         for i in range(num_docs):
             test[i] = json.loads(test[i])
