@@ -2,13 +2,20 @@ import argparse
 import pathlib
 import os
 import json
-from nltk.stem.porter import PorterStemmer
+import pke
 
 from utils.evaluation import evaluate
 from utils.nlp import stem_keywords
-from utils.keybart import keybart, KeyphraseGenerationPipeline
 
-def keybart_score(
+def position_rank(doc, top_n=10):
+    extractor = pke.unsupervised.PositionRank()
+    extractor.load_document(input=doc, language='en')
+    extractor.candidate_selection()
+    extractor.candidate_weighting()
+    keyphrase_score = extractor.get_n_best(n=top_n)
+    return keyphrase_score
+
+def pke_score(
     dataset_name: str,
     data_path: str,
     output_path: str,
@@ -42,35 +49,29 @@ def keybart_score(
     num_docs = len(test)
     predictions = []
 
-    model_name = "bloomberg/KeyBART"
-    generator = KeyphraseGenerationPipeline(model_name=model_name, truncation=True)
-
     for i in range(num_docs):
         test[i] = json.loads(test[i])
 
         # Dataset specific
-        if dataset_name in [
-            "midas/kp20k",
-            "midas/nus",
-            "midas/inspec",
-            "midas/krapivin",
-            "midas/semeval2010",
-        ]:
-            doc = " ".join(test[i]["document"])
-            abstractive_keyphrases = test[i]["abstractive_keyphrases"]
-            extractive_keyphrases = test[i]["extractive_keyphrases"]
-        elif dataset_name == "midas/ldkp3k":
+        if dataset_name == "midas/ldkp3k":
             sections = []
             for j, section in enumerate(test[i]["sections"]):
                 if section.lower() != "abstract":
                     sections.append(" ".join(test[i]["sec_text"][j]))
-            doc = " ".join([s for s in sections])
             abstractive_keyphrases = test[i]["abstractive_keyphrases"]
             extractive_keyphrases = test[i]["extractive_keyphrases"]
         else:
             raise NotImplementedError
+        
+        # Create a list to store all keyphrases
+        predicted_keyphrases = []
+        for section in sections: 
+            # Add top 10 keyphrases from each section
+            predicted_keyphrases.extend(position_rank(section, top_n=10))
+        # Rerank the keyphrases
+        predicted_keyphrases.sort(key=lambda x: x[1], reverse=True)
+        predicted_keyphrases = [k[0] for k in predicted_keyphrases][:10]
 
-        predicted_keyphrases = keybart(generator, doc, top_n=10)
         predictions.append(predicted_keyphrases)
 
         abstractive_keyphrases = stem_keywords(abstractive_keyphrases)
@@ -99,20 +100,17 @@ def keybart_score(
         
         print(f"Processed {i+1} documents", end="\r")
 
+    # Average results
     for k in results.keys():
         for score in results[k].keys():
             results[k][score] /= num_docs
-    json.dump(results, open(f"{dataset_output_path}/keybart.json", "w"), indent=4)
-    json.dump(predictions, open(f"{dataset_output_path}/keybart-preds.json", "w"), indent=4)
+    # Write results to file
+    json.dump(results, open(f"{dataset_output_path}/position_rank-reranked.json", "w"), indent=4)
+    json.dump(predictions, open(f"{dataset_output_path}/position_rank-reranked-preds.json", "w"), indent=4)
 
 
 if __name__ == "__main__":
-    # Example: python3 src/02-keybart.py --dataset midas/kp20k
-    # Or python3 src/02-keybart.py --dataset midas/ldkp3k
-    # Or python3 src/02-keybart.py --dataset midas/inspec
-    # Or python3 src/02-keybart.py --dataset midas/semeval2010
-    # Or python3 src/02-keybart.py --dataset midas/nus
-    # Or python3 src/02-keybart.py --dataset midas/krapivin
+    # Example: python3 src/01-pke-reranked.py --dataset midas/ldkp3k
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--dataset", type=str, required=True)
@@ -125,4 +123,4 @@ if __name__ == "__main__":
     data_path = args.data
     output_path = args.output
 
-    keybart_score(dataset_name, data_path, output_path)
+    pke_score(dataset_name, data_path, output_path)

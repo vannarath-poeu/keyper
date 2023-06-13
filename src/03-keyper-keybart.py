@@ -7,23 +7,20 @@ from keybert import KeyBERT
 import re
 from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
+import copy
 
 from utils.evaluation import evaluate
 from utils.nlp import stem_keywords
-
-def extract_keywords(doc, top_n=10):
-  extractor = pke.unsupervised.PositionRank()
-  extractor.load_document(input=doc, language='en')
-  extractor.candidate_selection()
-  extractor.candidate_weighting()
-  keyphrases = extractor.get_n_best(n=top_n)
-  return keyphrases
+from utils.keybart import keybart_list, KeyphraseGenerationPipeline
 
 def rank_keywords(node_scores, section_keywords, top_n=10):
     top_keywords = {}
     for si, sj in sorted(node_scores, key=node_scores.get, reverse=True):
-        kw = section_keywords[si][sj][0]
+        kw = section_keywords[si][sj]
         top_keywords[kw] = top_keywords.get(kw, 0) + node_scores[(si, sj)]
+
+    stemmed_keywords = stem_keywords(top_keywords.keys())
+    stemmed_keywords_map = {kw: s_kw for kw, s_kw in zip(top_keywords.keys(), stemmed_keywords)}
     
     sorted_keywords = sorted(top_keywords,
         key=lambda k: (len(k.split(" ")), -top_keywords.get(k, 0)))
@@ -32,10 +29,7 @@ def rank_keywords(node_scores, section_keywords, top_n=10):
         if top_keywords[sorted_keywords[i]] == 0:
             continue
         for j in range(i+1, len(sorted_keywords)):
-            # l = sorted_keywords[i].split(" ")
-            # p = sorted_keywords[j].split(" ")
-            # if set(l).issubset(set(p)):
-            if sorted_keywords[i] in sorted_keywords[j]:
+            if stemmed_keywords_map[sorted_keywords[i]] == stemmed_keywords_map[sorted_keywords[j]]:
                 top_keywords[sorted_keywords[i]] += top_keywords[sorted_keywords[j]]
                 top_keywords[sorted_keywords[j]] = 0
     
@@ -70,11 +64,13 @@ def keyper_score(
         for k in ["abstractive", "extractive", "combined"]
     }
 
-    num_docs = 20 # len(test)
+    num_docs = len(test)
     predictions = []
 
     # Init model
     kw_model = KeyBERT(model="microsoft/MiniLM-L12-H384-uncased")
+    model_name = "bloomberg/KeyBART"
+    generator = KeyphraseGenerationPipeline(model_name=model_name, truncation=True)
 
     for i in range(num_docs):
         test[i] = json.loads(test[i])
@@ -91,31 +87,35 @@ def keyper_score(
         else:
             raise NotImplementedError
 
-        section_keywords = [extract_keywords(doc) for doc in sections]
+        section_keywords = keybart_list(generator, sections, top_n=10)
+
+        if sum([len(kw) for kw in section_keywords]) == 0:
+            print(f"Skipping {i} as no keywords found")
+            continue
 
         keyword_pair_similarity = {}
         for si in range(len(sections)):
             if si + 1 < len(sections):
                 keyword_1 = section_keywords[si]
                 keyword_2 = section_keywords[si + 1]
-                emb_1 = kw_model.model.embed([kw for kw, _ in keyword_1])
-                emb_2 = kw_model.model.embed([kw for kw, _ in keyword_2])
+                emb_1 = kw_model.model.embed(keyword_1)
+                emb_2 = kw_model.model.embed(keyword_2)
 
                 for sj, e1 in enumerate(keyword_1):
                     for sk, e2 in enumerate(keyword_2):
-                        keyword_pair_similarity[(e1[0], e2[0])] = cosine_similarity(
+                        keyword_pair_similarity[(e1, e2)] = cosine_similarity(
                             [emb_1[sj]],
                             [emb_2[sk]]
                         )[0][0]
             if si + 2 < len(sections):
                 keyword_1 = section_keywords[si]
                 keyword_2 = section_keywords[si + 2]
-                emb_1 = kw_model.model.embed([kw for kw, _ in keyword_1])
-                emb_2 = kw_model.model.embed([kw for kw, _ in keyword_2])
+                emb_1 = kw_model.model.embed([kw for kw in keyword_1])
+                emb_2 = kw_model.model.embed([kw for kw in keyword_2])
 
                 for sj, e1 in enumerate(keyword_1):
                     for sk, e2 in enumerate(keyword_2):
-                        keyword_pair_similarity[(e1[0], e2[0])] = cosine_similarity(
+                        keyword_pair_similarity[(e1, e2)] = cosine_similarity(
                             [emb_1[sj]],
                             [emb_2[sk]]
                         )[0][0]
@@ -138,11 +138,11 @@ def keyper_score(
                     G.add_edge(source_node, (si, sj), capacity=10_000)
                 if si + 1 < num_sections:
                     for sk, w2 in enumerate(section_keywords[si + 1]):
-                        similarity = keyword_pair_similarity[(w1[0], w2[0])]
+                        similarity = keyword_pair_similarity[(w1, w2)]
                         G.add_edge((si, sj), (si + 1, sk), capacity=similarity)
                 if si + 2 < num_sections:
                     for sk, w2 in enumerate(section_keywords[si + 2]):
-                        similarity = keyword_pair_similarity[(w1[0], w2[0])]
+                        similarity = keyword_pair_similarity[(w1, w2)]
                         G.add_edge((si, sj), (si + 2, sk), capacity=similarity)
             add_source = False
         
@@ -158,6 +158,8 @@ def keyper_score(
 
         predicted_keyphrases = rank_keywords(node_scores, section_keywords, top_n=10)
         predictions.append(predicted_keyphrases)
+
+        # print(abstractive_keyphrases, extractive_keyphrases)
 
         abstractive_keyphrases = stem_keywords(abstractive_keyphrases)
         extractive_keyphrases = stem_keywords(extractive_keyphrases)
@@ -185,15 +187,18 @@ def keyper_score(
         
         print(f"Processed {i+1} documents", end="\r")
 
-    for k in results.keys():
-        for score in results[k].keys():
-            results[k][score] /= num_docs
-    json.dump(results, open(f"{dataset_output_path}/keyper.json", "w"), indent=4)
-    json.dump(predictions, open(f"{dataset_output_path}/keyper-preds.json", "w"), indent=4)
+        temp = copy.deepcopy(results)
+
+        for k in temp.keys():
+            for score in temp[k].keys():
+                temp[k][score] /= (i+1)
+        temp["num_docs"] = i+1
+        json.dump(temp, open(f"{dataset_output_path}/keyper-keybart.json", "w"), indent=4)
+        json.dump(predictions, open(f"{dataset_output_path}/keyper-keybart-preds.json", "w"), indent=4)
 
 
 if __name__ == "__main__":
-    # Example: python3 src/03-keyper.py --dataset midas/ldkp3k
+    # Example: python3 src/03-keyper-keybart.py --dataset midas/ldkp3k
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--dataset", type=str, required=True)

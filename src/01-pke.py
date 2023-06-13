@@ -3,16 +3,9 @@ import pathlib
 import os
 import json
 import pke
-import spacy
-from nltk.stem.porter import PorterStemmer
 
-def list_jsonl(path):
-    files = []
-    for r, _, f in os.walk(path):
-        for file in f:
-            if '.jsonl' in file:
-                files.append(os.path.join(r, file))
-    return files
+from utils.evaluation import evaluate
+from utils.nlp import stem_keywords
 
 def position_rank(doc, top_n=10):
     extractor = pke.unsupervised.PositionRank()
@@ -22,66 +15,6 @@ def position_rank(doc, top_n=10):
     keyphrase_score = extractor.get_n_best(n=top_n)
     return [k for k, _ in keyphrase_score]
 
-def fscore(precision: float, recall: float):
-    if precision == 0 or recall == 0:
-        return 0
-    
-    assert precision >= 0 and precision <= 1, f"Precision is not between 0 and 1: {precision}"
-    assert recall >= 0 and recall <= 1, f"Recall is not between 0 and 1: {recall}"
-    
-    f1_score = 2 * (precision * recall) / (precision + recall)
-
-    assert 0 <= f1_score <= 1, f"F1 score is not between 0 and 1: {f1_score}, precision: {precision}, recall: {recall}"
-
-    return f1_score
-
-def precision_at_k(predictions: list, labels: list, k=10):
-    predictions = predictions[:min(k, len(predictions))]
-    if len(predictions) == 0 or len(labels) == 0:
-        return 0
-    
-    precision = 0
-    remaining_labels = labels[:]
-    for p in predictions:
-        for l in remaining_labels:
-            if set(l).issubset(set(p)) or set(p).issubset(set(l)):
-                remaining_labels.remove(l)
-                precision += 1
-                # 1 label matches 1 prediction
-                break
-        
-    precision /= len(predictions)
-
-    assert 0 <= precision <= 1, f"Precision is not between 0 and 1: {precision}, predictions: {predictions}, labels: {labels}"
-    return precision
-
-def recall_at_k(predictions: list, labels: list, k=10):
-    predictions = predictions[:min(k, len(predictions))]
-    if len(predictions) == 0 or len(labels) == 0:
-        return 0
-
-    recall = 0
-    remaining_labels = labels[:]
-    for p in predictions:
-        for l in remaining_labels:
-            if set(l).issubset(set(p)) or set(p).issubset(set(l)):
-                remaining_labels.remove(l)
-                recall += 1
-                # 1 label matches 1 prediction
-                break
-
-    recall /= len(labels)
-    assert 0 <= recall <= 1, f"Recall is not between 0 and 1: {recall}, predictions: {predictions}, labels: {labels}"
-    return recall
-
-def stem_keywords(keyword_list: list):
-    porter_stemmer = PorterStemmer()
-    stemmed_keywords = []
-    for kw in keyword_list:
-        stemmed = [porter_stemmer.stem(q) for q in kw.split()]
-        stemmed_keywords.append(stemmed)
-    return stemmed_keywords
-
 def pke_score(
     dataset_name: str,
     data_path: str,
@@ -89,7 +22,6 @@ def pke_score(
 ):
     # Load dataset
     dataset_path = f"{data_path}/{dataset_name}"
-    # json_l_list = list_jsonl(dataset_path)
     test_jsonl = f"{dataset_path}/test.jsonl"
 
     assert os.path.exists(test_jsonl), f"File {test_jsonl} does not exist"
@@ -99,90 +31,89 @@ def pke_score(
 
     with open(test_jsonl, "r") as f:
         test = f.readlines()
-        results = {
-            k : {
-                "precision@5": 0,
-                "recall@5": 0,
-                "fscore@5": 0,
-                "precision@10": 0,
-                "recall@10": 0,
-                "fscore@10": 0,
-            }
-            for k in ["abstractive", "extractive", "combined"]
+    
+    assert len(test) > 0, f"File {test_jsonl} is empty"
+
+    results = {
+        k : {
+            "precision@5": 0,
+            "recall@5": 0,
+            "fscore@5": 0,
+            "precision@10": 0,
+            "recall@10": 0,
+            "fscore@10": 0,
         }
+        for k in ["abstractive", "extractive", "combined"]
+    }
 
-        num_docs = len(test)
+    num_docs = len(test)
+    predictions = []
 
-        for i in range(num_docs):
-            test[i] = json.loads(test[i])
+    for i in range(num_docs):
+        test[i] = json.loads(test[i])
 
-            # Dataset specific
-            if dataset_name in [
-                "midas/nus",
-                "midas/inspec",
-                "midas/krapivin",
-                "midas/semeval2010",
-            ]:
-                doc = " ".join(test[i]["document"])
-                abstractive_keyphrases = test[i]["abstractive_keyphrases"]
-                extractive_keyphrases = test[i]["extractive_keyphrases"]
-            elif dataset_name == "midas/ldkp3k":
-                sections = []
-                for j, section in enumerate(test[i]["sections"]):
-                    if section.lower() != "abstract":
-                        sections.append(" ".join(test[i]["sec_text"][j]))
-                doc = " ".join([s for s in sections])
-                abstractive_keyphrases = test[i]["abstractive_keyphrases"]
-                extractive_keyphrases = test[i]["extractive_keyphrases"]
-            else:
-                raise NotImplementedError
+        # Dataset specific
+        if dataset_name in [
+            "midas/kp20k",
+            "midas/nus",
+            "midas/inspec",
+            "midas/krapivin",
+            "midas/semeval2010",
+        ]:
+            doc = " ".join(test[i]["document"])
+            abstractive_keyphrases = test[i]["abstractive_keyphrases"]
+            extractive_keyphrases = test[i]["extractive_keyphrases"]
+        elif dataset_name == "midas/ldkp3k":
+            sections = []
+            for j, section in enumerate(test[i]["sections"]):
+                if section.lower() != "abstract":
+                    sections.append(" ".join(test[i]["sec_text"][j]))
+            doc = " ".join([s for s in sections])
+            abstractive_keyphrases = test[i]["abstractive_keyphrases"]
+            extractive_keyphrases = test[i]["extractive_keyphrases"]
+        else:
+            raise NotImplementedError
 
-            combined_keyphrases = abstractive_keyphrases + extractive_keyphrases
-            predicted_keyphrases = position_rank(doc, top_n=10)
+        predicted_keyphrases = position_rank(doc, top_n=10)
+        predictions.append(predicted_keyphrases)
 
-            precision_at_5 = precision_at_k(predicted_keyphrases, abstractive_keyphrases, k=5)
-            recall_at_5 = recall_at_k(predicted_keyphrases, abstractive_keyphrases, k=5)
-            results["abstractive"]["precision@5"] += precision_at_5
-            results["abstractive"]["recall@5"] += recall_at_5
-            results["abstractive"]["fscore@5"] += fscore(precision_at_5, recall_at_5)
-            precision_at_10 = precision_at_k(predicted_keyphrases, abstractive_keyphrases, k=10)
-            recall_at_10 = recall_at_k(predicted_keyphrases, abstractive_keyphrases, k=10)
-            results["abstractive"]["precision@10"] += precision_at_10
-            results["abstractive"]["recall@10"] += recall_at_10
-            results["abstractive"]["fscore@10"] += fscore(precision_at_10, recall_at_10)
+        abstractive_keyphrases = stem_keywords(abstractive_keyphrases)
+        extractive_keyphrases = stem_keywords(extractive_keyphrases)
+        combined_keyphrases = abstractive_keyphrases + extractive_keyphrases
 
-            precision_at_5 = precision_at_k(predicted_keyphrases, extractive_keyphrases, k=5)
-            recall_at_5 = recall_at_k(predicted_keyphrases, extractive_keyphrases, k=5)
-            results["extractive"]["precision@5"] += precision_at_5
-            results["extractive"]["recall@5"] += recall_at_5
-            results["extractive"]["fscore@5"] += fscore(precision_at_5, recall_at_5)
-            precision_at_10 = precision_at_k(predicted_keyphrases, extractive_keyphrases, k=10)
-            recall_at_10 = recall_at_k(predicted_keyphrases, extractive_keyphrases, k=10)
-            results["extractive"]["precision@10"] += precision_at_10
-            results["extractive"]["recall@10"] += recall_at_10
-            results["extractive"]["fscore@10"] += fscore(precision_at_10, recall_at_10)
+        predicted_keyphrases = stem_keywords(predicted_keyphrases)
 
-            precision_at_5 = precision_at_k(predicted_keyphrases, combined_keyphrases, k=5)
-            recall_at_5 = recall_at_k(predicted_keyphrases, combined_keyphrases, k=5)
-            results["combined"]["precision@5"] += precision_at_5
-            results["combined"]["recall@5"] += recall_at_5
-            results["combined"]["fscore@5"] += fscore(precision_at_5, recall_at_5)
-            precision_at_10 = precision_at_k(predicted_keyphrases, combined_keyphrases, k=10)
-            recall_at_10 = recall_at_k(predicted_keyphrases, combined_keyphrases, k=10)
-            results["combined"]["precision@10"] += precision_at_10
-            results["combined"]["recall@10"] += recall_at_10
-            results["combined"]["fscore@10"] += fscore(precision_at_10, recall_at_10)
-            
-            print(f"Processed {i+1} documents", end="\r")
+        for k in [5, 10]:
+            p, r, f = evaluate(predicted_keyphrases[:k], abstractive_keyphrases)
+            results["abstractive"][f"precision@{k}"] += p
+            results["abstractive"][f"recall@{k}"] += r
+            results["abstractive"][f"fscore@{k}"] += f
 
-        for k in results.keys():
-            for score in results[k].keys():
-                results[k][score] /= num_docs
-        json.dump(results, open(f"{dataset_output_path}/topic_rank.json", "w"), indent=4)
+        for k in [5, 10]:
+            p, r, f = evaluate(predicted_keyphrases[:k], extractive_keyphrases)
+            results["extractive"][f"precision@{k}"] += p
+            results["extractive"][f"recall@{k}"] += r
+            results["extractive"][f"fscore@{k}"] += f
+
+        for k in [5, 10]:
+            p, r, f = evaluate(predicted_keyphrases[:k], combined_keyphrases)
+            results["combined"][f"precision@{k}"] += p
+            results["combined"][f"recall@{k}"] += r
+            results["combined"][f"fscore@{k}"] += f
+        
+        print(f"Processed {i+1} documents", end="\r")
+
+    # Average results
+    for k in results.keys():
+        for score in results[k].keys():
+            results[k][score] /= num_docs
+    # Write results to file
+    json.dump(results, open(f"{dataset_output_path}/position_rank.json", "w"), indent=4)
+    json.dump(predictions, open(f"{dataset_output_path}/position_rank-preds.json", "w"), indent=4)
 
 
 if __name__ == "__main__":
-    # Example: python3 src/00-load_data.py --dataset midas/kp20k --subset raw
+    # Example: python3 src/01-pke.py --dataset midas/kp20k
     # Or python3 src/01-pke.py --dataset midas/ldkp3k
     # Or python3 src/01-pke.py --dataset midas/inspec
     # Or python3 src/01-pke.py --dataset midas/semeval2010

@@ -7,23 +7,64 @@ from keybert import KeyBERT
 import re
 from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
+import spacy
+from collections import Counter
+import math
+import copy
 
 from utils.evaluation import evaluate
 from utils.nlp import stem_keywords
 
-def extract_keywords(doc, top_n=10):
-  extractor = pke.unsupervised.PositionRank()
-  extractor.load_document(input=doc, language='en')
-  extractor.candidate_selection()
-  extractor.candidate_weighting()
-  keyphrases = extractor.get_n_best(n=top_n)
-  return keyphrases
+nlp = spacy.load('en_core_web_sm') 
+
+def extract_noun_list(doc):
+  nlp_doc = nlp(doc)
+  noun_list = []
+  for np in nlp_doc.noun_chunks:
+    token = np.text.lower().strip().split(" ")
+    filtered = []
+    for word in token:
+      lexeme = nlp.vocab[word]
+      if lexeme.is_stop == False and len(word) >= 2:
+          filtered.append(word)
+    if len(filtered) >= 4:
+      continue
+    token = re.sub(r'[^a-zA-Z\s]', '', " ".join(filtered))
+    token = re.sub(r'\s\s+', ' ', token)
+    token = token.strip()
+    if token:
+      noun_list.append(token)
+  return noun_list
+
+def extract_keywords(kw_model, sections, top_n=10):
+  # return model.get_key_phrases(doc)
+  section_kewords = []
+  section_noun_list = [extract_noun_list(sec) for sec in sections]
+  all_noun_list = []
+  section_counter_list = [Counter(noun_list) for noun_list in section_noun_list]
+  section_emb = kw_model.model.embed(sections)
+  for i, noun_list in enumerate(section_noun_list):
+    section_kewords.append([])
+    np_list = list(set(noun_list))
+    np_emb = kw_model.model.embed(np_list)
+    for j, np in enumerate(np_list):
+      cosine_similarity_score = cosine_similarity(
+        [section_emb[i]],
+        [np_emb[j]]
+      )[0][0]
+      tf_idf_score = section_counter_list[i][np] / len(sections[i]) * math.log(len(sections) / sum([min(section_counter[np], 1) for section_counter in section_counter_list]))
+      section_kewords[i].append((np, cosine_similarity_score * tf_idf_score))
+
+  return [sorted(sec_kw, key=lambda x: x[1], reverse=True)[:10] for sec_kw in section_kewords]
 
 def rank_keywords(node_scores, section_keywords, top_n=10):
     top_keywords = {}
     for si, sj in sorted(node_scores, key=node_scores.get, reverse=True):
         kw = section_keywords[si][sj][0]
         top_keywords[kw] = top_keywords.get(kw, 0) + node_scores[(si, sj)]
+    
+    stemmed_keywords = stem_keywords(top_keywords.keys())
+    stemmed_keywords_map = {kw: s_kw for kw, s_kw in zip(top_keywords.keys(), stemmed_keywords)}
     
     sorted_keywords = sorted(top_keywords,
         key=lambda k: (len(k.split(" ")), -top_keywords.get(k, 0)))
@@ -32,10 +73,7 @@ def rank_keywords(node_scores, section_keywords, top_n=10):
         if top_keywords[sorted_keywords[i]] == 0:
             continue
         for j in range(i+1, len(sorted_keywords)):
-            # l = sorted_keywords[i].split(" ")
-            # p = sorted_keywords[j].split(" ")
-            # if set(l).issubset(set(p)):
-            if sorted_keywords[i] in sorted_keywords[j]:
+            if stemmed_keywords_map[sorted_keywords[i]] == stemmed_keywords_map[sorted_keywords[j]]:
                 top_keywords[sorted_keywords[i]] += top_keywords[sorted_keywords[j]]
                 top_keywords[sorted_keywords[j]] = 0
     
@@ -70,7 +108,7 @@ def keyper_score(
         for k in ["abstractive", "extractive", "combined"]
     }
 
-    num_docs = 20 # len(test)
+    num_docs = len(test)
     predictions = []
 
     # Init model
@@ -83,7 +121,7 @@ def keyper_score(
         if dataset_name == "midas/ldkp3k":
             sections = []
             for j, section in enumerate(test[i]["sections"]):
-                if section.lower() != "abstract" and section.lower() != "title":
+                if section.lower() != "abstract":
                     sections.append(" ".join(test[i]["sec_text"][j]))
             # doc = " ".join([s for s in sections])
             abstractive_keyphrases = test[i]["abstractive_keyphrases"]
@@ -91,7 +129,7 @@ def keyper_score(
         else:
             raise NotImplementedError
 
-        section_keywords = [extract_keywords(doc) for doc in sections]
+        section_keywords = extract_keywords(kw_model, sections)
 
         keyword_pair_similarity = {}
         for si in range(len(sections)):
@@ -185,15 +223,18 @@ def keyper_score(
         
         print(f"Processed {i+1} documents", end="\r")
 
-    for k in results.keys():
-        for score in results[k].keys():
-            results[k][score] /= num_docs
-    json.dump(results, open(f"{dataset_output_path}/keyper.json", "w"), indent=4)
-    json.dump(predictions, open(f"{dataset_output_path}/keyper-preds.json", "w"), indent=4)
+        temp = copy.deepcopy(results)
+
+        for k in temp.keys():
+            for score in temp[k].keys():
+                temp[k][score] /= (i+1)
+        temp["num_docs"] = i+1
+        json.dump(temp, open(f"{dataset_output_path}/keyper-similarity.json", "w"), indent=4)
+        json.dump(predictions, open(f"{dataset_output_path}/keyper-similarity-preds.json", "w"), indent=4)
 
 
 if __name__ == "__main__":
-    # Example: python3 src/03-keyper.py --dataset midas/ldkp3k
+    # Example: python3 src/03-keyper-similarity.py --dataset midas/ldkp3k
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--dataset", type=str, required=True)
