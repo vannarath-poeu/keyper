@@ -147,16 +147,16 @@ def max_flow(
 
         # Enforce flow through each node
         def flow_rule(model, node):
-            inFlow  = sum(model.f[(source, node)] for source in nodes)
-            outFlow = sum(model.f[(node, dest)] for dest in nodes)
             if node == "source" or node == "sink":
                 return pyo.Constraint.Skip
+            inFlow  = sum(model.f[(source, node)] for source in nodes)
+            outFlow = sum(model.f[(node, dest)] for dest in nodes)
             return inFlow == outFlow
 
         model.flow = pyo.Constraint(nodes, rule=flow_rule)
 
         # solver = pyo.SolverFactory('glpk')  # "glpk"
-        solver = pyo.SolverFactory('cbc')  # "cbc"
+        solver = pyo.SolverFactory('gurobi')  # "cbc"
 
         res = solver.solve(model)
 
@@ -168,7 +168,7 @@ def max_flow(
             if score <= 0:
                 continue
             node1, node2 = val
-            if node1 == "source" or node2 == "sink":
+            if node1 == "source":
                 continue
             _, _, kw1 = node1.split("_")
             _, _, kw2 = node2.split("_")
