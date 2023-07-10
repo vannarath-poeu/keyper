@@ -161,7 +161,7 @@ def max_flow(
         # model.flow = pyo.Constraint(nodes, rule=flow_rule)
 
         # solver = pyo.SolverFactory('glpk')  # "glpk"
-        solver = pyo.SolverFactory('cbc')  # "cbc"
+        solver = pyo.SolverFactory('gurobi')  # "cbc"
 
         res = solver.solve(model)
 
