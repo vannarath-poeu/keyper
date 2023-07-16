@@ -31,8 +31,8 @@ def rank_keywords(top_keywords, top_n=10):
 def max_flow(
     data_path: str,
     output_path: str,
-    max_activation=10,
-    num_keyphrases=20,
+    num_keyphrases: int,
+    max_activation: int,
     num_records=100,
 ):
     prediction_file_path = f"{data_path}/keyper-similarity-temp-preds-{num_records}.json"
@@ -70,6 +70,8 @@ def max_flow(
         for k in ["abstractive", "extractive", "combined"]
     }
 
+    num_records = len(predictions)
+    print(f"Number of records: {num_records}")
     for i in range(num_records):
         model = pyo.ConcreteModel("max_flow")
         keyword_pair_similarity = defaultdict(float)
@@ -77,6 +79,7 @@ def max_flow(
             kw0, kw1, sim = similarity
             keyword_pair_similarity[(kw0, kw1)] = sim
 
+        # Limit number of keyphrases
         section_keywords = [sk[:num_keyphrases] for sk in predictions[i]]
         num_sections = len(section_keywords)
 
@@ -127,23 +130,23 @@ def max_flow(
         
         nodes = list(nodes)
         node_products = [(s, t) for s in nodes for t in nodes]
-        # model.f = pyo.Var(node_products, domain=pyo.NonNegativeReals)
-        model.a = pyo.Var(nodes, domain=pyo.Binary)
+        model.f = pyo.Var(node_products, domain=pyo.NonNegativeReals)
+        model.a = pyo.Var(nodes, domain=pyo.NonNegativeReals)
 
         def get_node_total(node):
             return sum([v for k, v in edges.items() if k[0] == node])
 
         # Maximize the flow into the sink nodes
         def total_rule(model):
-            return sum(model.a[n[0]] * get_node_total(n[0]) for n in node_products)
+            return sum(model.a[n[0]] * model.f[n] for n in node_products)
 
         model.total = pyo.Objective(rule=total_rule, sense=pyo.maximize)
 
         # Enforce an upper limit on the flow across each edge
-        # def limit_rule(model, s, e):
-        #     return (model.a[s] * get_node_total(n)) <= edges.get((s, e), 0)
+        def limit_rule(model, s, e):
+            return (model.a[s] * model.f[(s, e)]) <= edges.get((s, e), 0)
 
-        # model.limit = pyo.Constraint(nodes, nodes, rule=limit_rule)
+        model.limit = pyo.Constraint(nodes, nodes, rule=limit_rule)
 
         # Enforce a section rule
         def section_rule(model, section):
@@ -152,30 +155,31 @@ def max_flow(
         model.section = pyo.Constraint(sections.keys(), rule=section_rule)
 
         # Enforce flow through each node
-        # def flow_rule(model, node):
-        #     inFlow  = sum(model.f[(source, node)] for source in nodes)
-        #     outFlow = sum(model.f[(node, dest)] for dest in nodes)
-        #     if node == "source" or node == "sink":
-        #         return pyo.Constraint.Skip
-        #     return inFlow == outFlow
+        def flow_rule(model, node):
+            if node == "source" or node == "sink":
+                return pyo.Constraint.Skip
+            inFlow  = sum(model.a[source] * model.f[(source, node)] for source in nodes)
+            outFlow = sum(model.a[node] * model.f[(node, dest)] for dest in nodes)
+            return inFlow == outFlow
 
-        # model.flow = pyo.Constraint(nodes, rule=flow_rule)
+        model.flow = pyo.Constraint(nodes, rule=flow_rule)
 
         # solver = pyo.SolverFactory('glpk')  # "glpk"
         solver = pyo.SolverFactory('gurobi')  # "cbc"
+        solver.options["NonConvex"] = 2
 
         res = solver.solve(model)
 
-        # pyo.assert_optimal_termination(res)
+        pyo.assert_optimal_termination(res)
 
         keyword_scores = defaultdict(float)
         for node in model.a:
-            if model.a[node].value is None or model.a[node].value < 1:
+            if model.a[node].value is None or model.a[node].value <= 0:
                 continue
             score = get_node_total(node)
             if score <= 0:
                 continue
-            if node == "source" or node == "sink":
+            if node == "source":
                 continue
             _, _, kw1 = node.split("_")
             keyword_scores[kw1] += score
@@ -183,7 +187,6 @@ def max_flow(
         # predicted_keyphrases = sorted(keyword_scores, key=keyword_scores.get, reverse=True)[:10]
         predicted_keyphrases = rank_keywords(keyword_scores, top_n=10)
         new_predictions.append(predicted_keyphrases)
-
         abstractive_keyphrases = stem_keywords(abstractive_keyphrases)
         extractive_keyphrases = stem_keywords(extractive_keyphrases)
         combined_keyphrases = abstractive_keyphrases + extractive_keyphrases
@@ -216,28 +219,22 @@ def max_flow(
             for score in temp[k].keys():
                 temp[k][score] /= (i+1)
         temp["num_docs"] = i+1
-        json.dump(temp, open(f"{output_path}/scores.json", "w"), indent=4)
+        json.dump(temp, open(f"{output_path}/scores-n={num_records}-p={num_keyphrases}-k={max_activation}.json", "w"), indent=4)
 
-        json.dump(new_predictions, open(f"{output_path}/predictions.json", "w"), indent=4)
+        json.dump(new_predictions, open(f"{output_path}/predictions-n={num_records}-p={num_keyphrases}-k={max_activation}.json", "w"), indent=4)
 
 
 
 if __name__ == "__main__":
-    # Example: python3 src/06-maxflow-activation-only.py
+    # Example: python3 src/06-maxflow-activation-soft.py
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--data", type=str, default="output/midas/ldkp3k")
-    parser.add_argument("--output", type=str, default="output/max_flow/activation-only")
+    parser.add_argument("--output", type=str, default="output/max_flow/activation-soft")
 
     args = parser.parse_args()
     # Get all the variables
     data_path = args.data
     output_path = args.output
 
-    max_flow(
-        data_path,
-        output_path,
-        num_keyphrases=10,
-        max_activation=5,
-        num_records=100,
-    )
+    max_flow(data_path, output_path, num_keyphrases=20, max_activation=10)

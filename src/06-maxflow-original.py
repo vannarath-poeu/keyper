@@ -32,9 +32,10 @@ def max_flow(
     data_path: str,
     output_path: str,
     max_activation=10,
+    num_records=100,
 ):
-    prediction_file_path = f"{data_path}/keyper-similarity-temp-preds-10.json"
-    similarity_file_path = f"{data_path}/keyper-similarity-temp-sims-10.json"
+    prediction_file_path = f"{data_path}/keyper-similarity-temp-preds-{num_records}.json"
+    similarity_file_path = f"{data_path}/keyper-similarity-temp-sims-{num_records}.json"
     assert os.path.exists(prediction_file_path), f"File {prediction_file_path} does not exist"
     assert os.path.exists(similarity_file_path), f"File {similarity_file_path} does not exist"
 
@@ -68,7 +69,7 @@ def max_flow(
         for k in ["abstractive", "extractive", "combined"]
     }
 
-    num_records = 10 #len(predictions)
+    print(f"Number of records: {num_records}")
     for i in range(num_records):
         model = pyo.ConcreteModel("max_flow")
         keyword_pair_similarity = defaultdict(float)
@@ -171,7 +172,7 @@ def max_flow(
             if node1 == "source":
                 continue
             _, _, kw1 = node1.split("_")
-            _, _, kw2 = node2.split("_")
+            # _, _, kw2 = node2.split("_")
             keyword_scores[kw1] += score
         
         # predicted_keyphrases = sorted(keyword_scores, key=keyword_scores.get, reverse=True)[:10]
@@ -210,8 +211,8 @@ def max_flow(
             for score in temp[k].keys():
                 temp[k][score] /= (i+1)
         temp["num_docs"] = i+1
-        json.dump(temp, open(f"{output_path}/scores.json", "w"), indent=4)
-        json.dump(new_predictions, open(f"{output_path}/predictions.json", "w"), indent=4)
+        json.dump(temp, open(f"{output_path}/scores-n={num_records}.json", "w"), indent=4)
+        json.dump(new_predictions, open(f"{output_path}/predictions-n={num_records}.json", "w"), indent=4)
 
 
 

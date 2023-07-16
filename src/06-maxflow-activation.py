@@ -31,10 +31,12 @@ def rank_keywords(top_keywords, top_n=10):
 def max_flow(
     data_path: str,
     output_path: str,
-    max_activation=10,
+    num_keyphrases: int,
+    max_activation: int,
+    num_records=100,
 ):
-    prediction_file_path = f"{data_path}/keyper-similarity-temp-preds-10.json"
-    similarity_file_path = f"{data_path}/keyper-similarity-temp-sims-10.json"
+    prediction_file_path = f"{data_path}/keyper-similarity-temp-preds-{num_records}.json"
+    similarity_file_path = f"{data_path}/keyper-similarity-temp-sims-{num_records}.json"
     assert os.path.exists(prediction_file_path), f"File {prediction_file_path} does not exist"
     assert os.path.exists(similarity_file_path), f"File {similarity_file_path} does not exist"
 
@@ -68,15 +70,15 @@ def max_flow(
         for k in ["abstractive", "extractive", "combined"]
     }
 
-    num_records = len(predictions)
+    print(f"Number of records: {num_records}")
     for i in range(num_records):
-        model = pyo.ConcreteModel("max_flow")
+        model = pyo.ConcreteModel()
         keyword_pair_similarity = defaultdict(float)
         for similarity in similarities[i]:
             kw0, kw1, sim = similarity
             keyword_pair_similarity[(kw0, kw1)] = sim
 
-        section_keywords = [sk[:max_activation] for sk in predictions[i]]
+        section_keywords = [sk[:num_keyphrases] for sk in predictions[i]]
         num_sections = len(section_keywords)
 
         test[i] = json.loads(test[i])
@@ -146,7 +148,7 @@ def max_flow(
 
         # Enforce a section rule
         def section_rule(model, section):
-            return sum(model.a[n] for n in sections[section]) <= 10
+            return sum(model.a[n] for n in sections[section]) <= max_activation
 
         model.section = pyo.Constraint(sections.keys(), rule=section_rule)
 
@@ -154,27 +156,29 @@ def max_flow(
         def flow_rule(model, node):
             if node == "source" or node == "sink":
                 return pyo.Constraint.Skip
-            inFlow  = sum(model.f[(source, node)] for source in nodes)
-            outFlow = sum(model.f[(node, dest)] for dest in nodes)
+            inFlow  = sum(model.a[source] * model.f[(source, node)] for source in nodes)
+            outFlow = sum(model.a[node] * model.f[(node, dest)] for dest in nodes)
             return inFlow == outFlow
 
         model.flow = pyo.Constraint(nodes, rule=flow_rule)
 
         # solver = pyo.SolverFactory('glpk')  # "glpk"
-        solver = pyo.SolverFactory('gurobi')  # "cbc"
+        solver = pyo.SolverFactory('gurobi', tee=True)  # "cbc"
+        solver.options["threads"] = 4
+        solver.options['IterationLimit'] = 1_000_000
 
         res = solver.solve(model)
 
-        pyo.assert_optimal_termination(res)
+        # pyo.assert_optimal_termination(res)
 
         keyword_scores = defaultdict(float)
         for node in model.a:
+            if node == "source":
+                continue
             if model.a[node].value is None or model.a[node].value < 1:
                 continue
-            score = get_node_total(node)
+            score = model.a[node].value * get_node_total(node)
             if score <= 0:
-                continue
-            if node == "source":
                 continue
             _, _, kw1 = node.split("_")
             keyword_scores[kw1] += score
@@ -214,9 +218,9 @@ def max_flow(
             for score in temp[k].keys():
                 temp[k][score] /= (i+1)
         temp["num_docs"] = i+1
-        json.dump(temp, open(f"{output_path}/scores.json", "w"), indent=4)
+        json.dump(temp, open(f"{output_path}/scores-n={num_records}-p={num_keyphrases}-k={max_activation}.json", "w"), indent=4)
 
-        json.dump(new_predictions, open(f"{output_path}/predictions.json", "w"), indent=4)
+        json.dump(new_predictions, open(f"{output_path}/predictions-n={num_records}-p={num_keyphrases}-k={max_activation}.json", "w"), indent=4)
 
 
 
@@ -232,4 +236,16 @@ if __name__ == "__main__":
     data_path = args.data
     output_path = args.output
 
-    max_flow(data_path, output_path, max_activation=20)
+    for num_records in [100]:
+        for num_keyphrases in [20]:
+            for max_activation in [7, 12, 15]:
+                if max_activation > num_keyphrases:
+                    continue
+                print(f"Running for {num_records} records, {num_keyphrases} keyphrases, {max_activation} max activation")
+                max_flow(
+                    data_path,
+                    output_path,
+                    num_keyphrases=num_keyphrases,
+                    max_activation=max_activation,
+                    num_records=num_records,
+                )

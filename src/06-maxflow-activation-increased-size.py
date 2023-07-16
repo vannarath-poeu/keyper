@@ -33,8 +33,8 @@ def max_flow(
     output_path: str,
     max_activation=10,
 ):
-    prediction_file_path = f"{data_path}/keyper-similarity-temp-preds-10.json"
-    similarity_file_path = f"{data_path}/keyper-similarity-temp-sims-10.json"
+    prediction_file_path = f"{data_path}/keyper-similarity-temp-preds-100.json"
+    similarity_file_path = f"{data_path}/keyper-similarity-temp-sims-100.json"
     assert os.path.exists(prediction_file_path), f"File {prediction_file_path} does not exist"
     assert os.path.exists(similarity_file_path), f"File {similarity_file_path} does not exist"
 
@@ -82,7 +82,7 @@ def max_flow(
         for k in ["abstractive", "extractive", "combined"]
     }
 
-    num_records = 10 #len(predictions)
+    num_records = 100 #len(predictions)
     for i in range(num_records):
         model = pyo.ConcreteModel("max_flow")
         keyword_pair_similarity = defaultdict(float)
