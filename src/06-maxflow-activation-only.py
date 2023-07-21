@@ -130,12 +130,12 @@ def max_flow(
         # model.f = pyo.Var(node_products, domain=pyo.NonNegativeReals)
         model.a = pyo.Var(nodes, domain=pyo.Binary)
 
-        def get_node_total(node):
-            return sum([v for k, v in edges.items() if k[0] == node])
+        # def get_node_total(node):
+        #     return sum([v for k, v in edges.items() if k[0] == node])
 
         # Maximize the flow into the sink nodes
         def total_rule(model):
-            return sum(model.a[n[0]] * get_node_total(n[0]) for n in node_products)
+            return sum(model.a[n[0]] * model.a[n[1]] * edges[(n[0], n[1])] for n in node_products)
 
         model.total = pyo.Objective(rule=total_rule, sense=pyo.maximize)
 
@@ -163,6 +163,8 @@ def max_flow(
 
         # solver = pyo.SolverFactory('glpk')  # "glpk"
         solver = pyo.SolverFactory('gurobi')  # "cbc"
+        solver.options["threads"] = 4
+        solver.options['IterationLimit'] = 1_000_000
 
         res = solver.solve(model)
 
@@ -170,12 +172,12 @@ def max_flow(
 
         keyword_scores = defaultdict(float)
         for node in model.a:
+            if node == "source" or node == "sink":
+                continue
             if model.a[node].value is None or model.a[node].value < 1:
                 continue
-            score = get_node_total(node)
+            score = sum(model.a[n[0]].value * model.a[n[1]].value * edges[(n[0], n[1])] for n in edges if n[0] == node)
             if score <= 0:
-                continue
-            if node == "source" or node == "sink":
                 continue
             _, _, kw1 = node.split("_")
             keyword_scores[kw1] += score
@@ -216,9 +218,9 @@ def max_flow(
             for score in temp[k].keys():
                 temp[k][score] /= (i+1)
         temp["num_docs"] = i+1
-        json.dump(temp, open(f"{output_path}/scores.json", "w"), indent=4)
+        json.dump(temp, open(f"{output_path}/scores-n={num_records}-p={num_keyphrases}-k={max_activation}.json", "w"), indent=4)
 
-        json.dump(new_predictions, open(f"{output_path}/predictions.json", "w"), indent=4)
+        json.dump(new_predictions, open(f"{output_path}/predictions-n={num_records}-p={num_keyphrases}-k={max_activation}.json", "w"), indent=4)
 
 
 

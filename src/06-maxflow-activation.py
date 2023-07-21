@@ -130,15 +130,22 @@ def max_flow(
         node_products = [(s, t) for s in nodes for t in nodes]
         model.f = pyo.Var(node_products, domain=pyo.NonNegativeReals)
         model.a = pyo.Var(nodes, domain=pyo.Binary)
+        model.aa = pyo.Var(node_products, domain=pyo.Binary)
 
-        def get_node_total(node):
-            return sum([v for k, v in edges.items() if k[0] == node])
+        # def get_node_total(node):
+        #     return sum([v for k, v in edges.items() if k[0] == node])
 
         # Maximize the flow into the sink nodes
         def total_rule(model):
-            return sum(model.a[n[0]] * model.f[n] for n in node_products)
+            return sum(model.aa[n] * model.f[n] for n in node_products)
 
         model.total = pyo.Objective(rule=total_rule, sense=pyo.maximize)
+
+        # Enforce an auxiliary variable to indicate if a node is active
+        def activation_rule(model, s, e):
+            return model.aa[(s, e)] == model.a[s] * model.a[e]
+
+        model.activation = pyo.Constraint(nodes, nodes, rule=activation_rule)
 
         # Enforce an upper limit on the flow across each edge
         def limit_rule(model, s, e):
@@ -165,7 +172,7 @@ def max_flow(
         # solver = pyo.SolverFactory('glpk')  # "glpk"
         solver = pyo.SolverFactory('gurobi', tee=True)  # "cbc"
         solver.options["threads"] = 4
-        solver.options['IterationLimit'] = 1_000_000
+        solver.options['IterationLimit'] = 10_000_000
 
         res = solver.solve(model)
 
@@ -173,11 +180,11 @@ def max_flow(
 
         keyword_scores = defaultdict(float)
         for node in model.a:
-            if node == "source":
+            if node == "source" or node == "sink":
                 continue
             if model.a[node].value is None or model.a[node].value < 1:
                 continue
-            score = model.a[node].value * get_node_total(node)
+            score = sum(model.a[n[0]].value * model.a[n[1]].value * model.f[n].value for n in node_products)
             if score <= 0:
                 continue
             _, _, kw1 = node.split("_")
@@ -236,9 +243,9 @@ if __name__ == "__main__":
     data_path = args.data
     output_path = args.output
 
-    for num_records in [100]:
+    for num_records in [100, 10, 1000]:
         for num_keyphrases in [20]:
-            for max_activation in [7, 12, 15]:
+            for max_activation in [5, 7, 10, 15, 20]:
                 if max_activation > num_keyphrases:
                     continue
                 print(f"Running for {num_records} records, {num_keyphrases} keyphrases, {max_activation} max activation")
