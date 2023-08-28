@@ -32,10 +32,15 @@ def max_flow(
     data_path: str,
     output_path: str,
     max_activation=10,
-    num_records=100,
+    num_records=None,
 ):
-    prediction_file_path = f"{data_path}/keyper-similarity-temp-preds-{num_records}.json"
-    similarity_file_path = f"{data_path}/keyper-similarity-temp-sims-{num_records}.json"
+    if num_records is None:
+        prediction_file_path = f"{data_path}/keyper-similarity-temp-preds.json"
+        similarity_file_path = f"{data_path}/keyper-similarity-temp-sims.json"
+    else:
+        prediction_file_path = f"{data_path}/keyper-similarity-temp-preds-{num_records}.json"
+        similarity_file_path = f"{data_path}/keyper-similarity-temp-sims-{num_records}.json"
+
     assert os.path.exists(prediction_file_path), f"File {prediction_file_path} does not exist"
     assert os.path.exists(similarity_file_path), f"File {similarity_file_path} does not exist"
 
@@ -54,6 +59,8 @@ def max_flow(
         similarities = json.load(f)
 
     new_predictions = []
+    if num_records is None:
+        num_records = len(predictions)
 
     with open(test_jsonl, "r") as f:
         test = f.readlines()
