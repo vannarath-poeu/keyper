@@ -10,7 +10,6 @@ from utils.evaluation import evaluate
 from utils.nlp import stem_keywords
 
 def rank_keywords(top_keywords, top_n=10):
-    
     stemmed_keywords = stem_keywords(top_keywords.keys())
     stemmed_keywords_map = {kw: s_kw for kw, s_kw in zip(top_keywords.keys(), stemmed_keywords)}
     
@@ -18,25 +17,30 @@ def rank_keywords(top_keywords, top_n=10):
         key=lambda k: (len(k.split(" ")), -top_keywords.get(k, 0)))
     
     for i in range(len(sorted_keywords)):
-        if top_keywords[sorted_keywords[i]] == 0:
+        if top_keywords[sorted_keywords[i]] == 0 or len(sorted_keywords[i]) < 3:
             continue
         for j in range(i+1, len(sorted_keywords)):
-            if stemmed_keywords_map[sorted_keywords[i]] == stemmed_keywords_map[sorted_keywords[j]]:
+            if stemmed_keywords_map[sorted_keywords[j]].startswith(stemmed_keywords_map[sorted_keywords[i]] + " "):
                 top_keywords[sorted_keywords[i]] += top_keywords[sorted_keywords[j]]
                 top_keywords[sorted_keywords[j]] = 0
     
     predicted_keyphrases = sorted(top_keywords, key=top_keywords.get, reverse=True)[:top_n]
+
     return predicted_keyphrases
 
 def max_flow(
     data_path: str,
     output_path: str,
-    max_activation=10,
-    num_keyphrases=20,
-    num_records=100,
+    max_keyphrases=10,
+    num_records=None,
 ):
-    prediction_file_path = f"{data_path}/keyper-similarity-temp-preds-{num_records}.json"
-    similarity_file_path = f"{data_path}/keyper-similarity-temp-sims-{num_records}.json"
+    if num_records is None:
+        prediction_file_path = f"{data_path}/keyper-similarity-temp-preds.json"
+        similarity_file_path = f"{data_path}/keyper-similarity-temp-sims.json"
+    else:
+        prediction_file_path = f"{data_path}/keyper-similarity-temp-preds-{num_records}.json"
+        similarity_file_path = f"{data_path}/keyper-similarity-temp-sims-{num_records}.json"
+
     assert os.path.exists(prediction_file_path), f"File {prediction_file_path} does not exist"
     assert os.path.exists(similarity_file_path), f"File {similarity_file_path} does not exist"
 
@@ -55,6 +59,8 @@ def max_flow(
         similarities = json.load(f)
 
     new_predictions = []
+    if num_records is None:
+        num_records = len(predictions)
 
     with open(test_jsonl, "r") as f:
         test = f.readlines()
@@ -70,6 +76,7 @@ def max_flow(
         for k in ["abstractive", "extractive", "combined"]
     }
 
+    print(f"Number of records: {num_records}")
     for i in range(num_records):
         model = pyo.ConcreteModel("max_flow")
         keyword_pair_similarity = defaultdict(float)
@@ -77,7 +84,7 @@ def max_flow(
             kw0, kw1, sim = similarity
             keyword_pair_similarity[(kw0, kw1)] = sim
 
-        section_keywords = [sk[:num_keyphrases] for sk in predictions[i]]
+        section_keywords = [sk[:max_keyphrases] for sk in predictions[i]]
         num_sections = len(section_keywords)
 
         test[i] = json.loads(test[i])
@@ -85,107 +92,105 @@ def max_flow(
         extractive_keyphrases = test[i]["extractive_keyphrases"]
 
         # nodes
-        nodes = set(["source", "sink"])
+        nodes = set(["source", "sink", "early_exit"])
         # edges
         edges = defaultdict(float)
-        sections = {}
 
         add_source = True
         for si, _ in enumerate(section_keywords):
             if len(section_keywords[si]) < 1:
                 continue
-            sections[si] = []
             for sj, w1 in enumerate(section_keywords[si]):
                 kw1 = w1[0]
-                node_1 = f"{si}_{sj}_{kw1}"
+                if len(kw1) < 3:
+                    continue
+                node_1 = f"{kw1}"
+                # if node_1 in nodes:
+                #     edges[(node_1, node_1)] = 1
                 nodes.add(node_1)
-                sections[si].append(node_1)
                 if add_source:
                     edges[("source", node_1)] = 10_000
                 if si + 1 < num_sections:
                     for sk, w2 in enumerate(section_keywords[si + 1]):
                         kw2 = w2[0]
-                        node_2 = f"{si + 1}_{sk}_{kw2}"
+                        if len(kw2) < 3:
+                            continue
+                        node_2 = f"{kw2}"
                         similarity = keyword_pair_similarity[(kw1, kw2)]
                         edges[(node_1, node_2)] = similarity
                 if si + 2 < num_sections:
                     for sk, w2 in enumerate(section_keywords[si + 2]):
                         kw2 = w2[0]
-                        node_2 = f"{si + 2}_{sk}_{kw2}"
+                        if len(kw2) < 3:
+                            continue
+                        node_2 = f"{kw2}"
                         similarity = keyword_pair_similarity[(kw1, kw2)]
                         edges[(node_1, node_2)] = similarity
-            add_source = False
+            # add_source = False
         
+        sink_node = "sink"
         for si in reversed(range(num_sections)):
             if len(section_keywords[si]) < 1:
                 continue
-            for sj, w1 in enumerate(section_keywords[si]):
+            for _, w1 in enumerate(section_keywords[si]):
                 kw1 = w1[0]
-                node_1 = f"{si}_{sj}_{kw1}"
-                edges[node_1, "sink"] = 10_000
-            break
+                if len(kw1) < 3:
+                    continue
+                node_1 = f"{kw1}"
+                edges[node_1, sink_node] = 10_000
+            else:
+                sink_node = "early_exit"
         
         nodes = list(nodes)
         node_products = [(s, t) for s in nodes for t in nodes]
-        # model.f = pyo.Var(node_products, domain=pyo.NonNegativeReals)
-        model.a = pyo.Var(nodes, domain=pyo.NonNegativeReals)
-
-        # def get_node_total(node):
-        #     return sum([v for k, v in edges.items() if k[0] == node])
+        model.f = pyo.Var(node_products, domain=pyo.NonNegativeReals)
 
         # Maximize the flow into the sink nodes
         def total_rule(model):
-            return sum(model.a[n[0]] * model.a[n[1]] * edges[(n[0], n[1])] for n in node_products)
+            return sum(model.f[n] for n in node_products)
 
         model.total = pyo.Objective(rule=total_rule, sense=pyo.maximize)
 
         # Enforce an upper limit on the flow across each edge
-        # def limit_rule(model, s, e):
-        #     return (model.a[s] * get_node_total(n)) <= edges.get((s, e), 0)
+        def limit_rule(model, s, e):
+            return model.f[(s, e)] <= edges.get((s, e), 0)
 
-        # model.limit = pyo.Constraint(nodes, nodes, rule=limit_rule)
-
-        # Enforce a section rule
-        def section_rule(model, section):
-            return sum(model.a[n] for n in sections[section]) <= max_activation
-
-        model.section = pyo.Constraint(sections.keys(), rule=section_rule)
+        model.limit = pyo.Constraint(nodes, nodes, rule=limit_rule)
 
         # Enforce flow through each node
-        # def flow_rule(model, node):
-        #     inFlow  = sum(model.f[(source, node)] for source in nodes)
-        #     outFlow = sum(model.f[(node, dest)] for dest in nodes)
-        #     if node == "source" or node == "sink":
-        #         return pyo.Constraint.Skip
-        #     return inFlow == outFlow
+        def flow_rule(model, node):
+            if node == "source" or node == "sink" or node == "early_exit":
+                return pyo.Constraint.Skip
+            inFlow  = sum(model.f[(source, node)] for source in nodes)
+            outFlow = sum(model.f[(node, dest)] for dest in nodes)
+            return inFlow == outFlow
 
-        # model.flow = pyo.Constraint(nodes, rule=flow_rule)
+        model.flow = pyo.Constraint(nodes, rule=flow_rule)
 
         # solver = pyo.SolverFactory('glpk')  # "glpk"
         solver = pyo.SolverFactory('gurobi')  # "cbc"
-        solver.options["threads"] = 4
-        solver.options['IterationLimit'] = 1_000_000
-        solver.options['NonConvex'] = 2
 
         res = solver.solve(model)
 
-        # pyo.assert_optimal_termination(res)
+        pyo.assert_optimal_termination(res)
 
         keyword_scores = defaultdict(float)
-        for node in model.a:
-            if node == "source" or node == "sink":
-                continue
-            if model.a[node].value is None or model.a[node].value < 1:
-                continue
-            score = sum(model.a[n[0]].value * model.a[n[1]].value * edges[(n[0], n[1])] for n in edges if n[0] == node)
+        for val in model.f:
+            score = model.f[val].value
             if score <= 0:
                 continue
-            _, _, kw1 = node.split("_")
+            kw1, kw2 = val
+            if kw1 == "source" or kw2 == "early_exit":
+                continue
             keyword_scores[kw1] += score
         
         # predicted_keyphrases = sorted(keyword_scores, key=keyword_scores.get, reverse=True)[:10]
         predicted_keyphrases = rank_keywords(keyword_scores, top_n=10)
         new_predictions.append(predicted_keyphrases)
+
+        # print(keyword_scores)
+        # print(new_predictions)
+        # raise
 
         abstractive_keyphrases = stem_keywords(abstractive_keyphrases)
         extractive_keyphrases = stem_keywords(extractive_keyphrases)
@@ -210,7 +215,7 @@ def max_flow(
             results["combined"][f"precision@{k}"] += p
             results["combined"][f"recall@{k}"] += r
             results["combined"][f"fscore@{k}"] += f
-
+        
         print(f"Processed {i+1} documents", end="\r")
 
         temp = copy.deepcopy(results)
@@ -219,28 +224,21 @@ def max_flow(
             for score in temp[k].keys():
                 temp[k][score] /= (i+1)
         temp["num_docs"] = i+1
-        json.dump(temp, open(f"{output_path}/scores-n={num_records}-p={num_keyphrases}-k={max_activation}.json", "w"), indent=4)
-
-        json.dump(new_predictions, open(f"{output_path}/predictions-n={num_records}-p={num_keyphrases}-k={max_activation}.json", "w"), indent=4)
+        json.dump(temp, open(f"{output_path}/scores-n={num_records}.json", "w"), indent=4)
+        json.dump(new_predictions, open(f"{output_path}/predictions-n={num_records}.json", "w"), indent=4)
 
 
 
 if __name__ == "__main__":
-    # Example: python3 src/06-maxflow-activation-soft.py
+    # Example: python3 src/11-maxflow-dynamic.py
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--data", type=str, default="output/midas/ldkp3k")
-    parser.add_argument("--output", type=str, default="output/max_flow/activation-soft")
+    parser.add_argument("--output", type=str, default="output/max_flow/dynamic")
 
     args = parser.parse_args()
     # Get all the variables
     data_path = args.data
     output_path = args.output
 
-    max_flow(
-        data_path,
-        output_path,
-        num_keyphrases=10,
-        max_activation=5,
-        num_records=10,
-    )
+    max_flow(data_path, output_path, max_keyphrases=10, num_records=None)

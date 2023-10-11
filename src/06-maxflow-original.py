@@ -21,7 +21,7 @@ def rank_keywords(top_keywords, top_n=10):
         if top_keywords[sorted_keywords[i]] == 0:
             continue
         for j in range(i+1, len(sorted_keywords)):
-            if stemmed_keywords_map[sorted_keywords[i]] == stemmed_keywords_map[sorted_keywords[j]]:
+            if stemmed_keywords_map[sorted_keywords[j]].startswith(stemmed_keywords_map[sorted_keywords[i]] + " "):
                 top_keywords[sorted_keywords[i]] += top_keywords[sorted_keywords[j]]
                 top_keywords[sorted_keywords[j]] = 0
     
@@ -92,7 +92,7 @@ def max_flow(
         extractive_keyphrases = test[i]["extractive_keyphrases"]
 
         # nodes
-        nodes = set(["source", "sink"])
+        nodes = set(["source", "sink", "early_exit"])
         # edges
         edges = defaultdict(float)
 
@@ -110,32 +110,26 @@ def max_flow(
                     for sk, w2 in enumerate(section_keywords[si + 1]):
                         kw2 = w2[0]
                         node_2 = f"{si + 1}_{sk}_{kw2}"
-                        # if (kw1, kw2) not in keyword_pair_similarity:
-                        #     print(f"Missing similarity for {kw1} and {kw2}")
-                        #     print(si, si + 1)
-                        #     continue
                         similarity = keyword_pair_similarity[(kw1, kw2)]
                         edges[(node_1, node_2)] = similarity
                 if si + 2 < num_sections:
                     for sk, w2 in enumerate(section_keywords[si + 2]):
                         kw2 = w2[0]
                         node_2 = f"{si + 2}_{sk}_{kw2}"
-                        # if (kw1, kw2) not in keyword_pair_similarity:
-                        #     print(f"Missing similarity for {kw1} and {kw2}")
-                        #     print(si, si + 2)
-                        #     continue
                         similarity = keyword_pair_similarity[(kw1, kw2)]
                         edges[(node_1, node_2)] = similarity
             add_source = False
-        
+
+        sink_node = "sink"
         for si in reversed(range(num_sections)):
             if len(section_keywords[si]) < 1:
                 continue
             for sj, w1 in enumerate(section_keywords[si]):
                 kw1 = w1[0]
                 node_1 = f"{si}_{sj}_{kw1}"
-                edges[node_1, "sink"] = 10_000
-            break
+                edges[node_1, sink_node] = 10_000
+            else:
+                sink_node = "early_exit"
         
         nodes = list(nodes)
         node_products = [(s, t) for s in nodes for t in nodes]
@@ -155,7 +149,7 @@ def max_flow(
 
         # Enforce flow through each node
         def flow_rule(model, node):
-            if node == "source" or node == "sink":
+            if node == "source" or node == "sink" or node == "early_exit":
                 return pyo.Constraint.Skip
             inFlow  = sum(model.f[(source, node)] for source in nodes)
             outFlow = sum(model.f[(node, dest)] for dest in nodes)
@@ -176,7 +170,7 @@ def max_flow(
             if score <= 0:
                 continue
             node1, node2 = val
-            if node1 == "source":
+            if node1 == "source" or node2 == "early_exit":
                 continue
             _, _, kw1 = node1.split("_")
             # _, _, kw2 = node2.split("_")
@@ -235,4 +229,4 @@ if __name__ == "__main__":
     data_path = args.data
     output_path = args.output
 
-    max_flow(data_path, output_path, max_activation=10)
+    max_flow(data_path, output_path, max_activation=10, num_records=100)
