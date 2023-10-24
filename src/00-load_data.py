@@ -24,6 +24,9 @@ if __name__ == "__main__":
     # Or python3 src/00-load_data.py --dataset midas/semeval2010 --subset raw --splits train,test
     # Or python3 src/00-load_data.py --dataset midas/nus --subset raw --splits test
     # Or python3 src/00-load_data.py --dataset midas/krapivin --subset raw --splits test
+    # Or python3 src/00-load_data.py --dataset midas/kptimes --subset raw
+    # Or python3 src/00-load_data.py --dataset midas/openkp --subset raw
+    # Or python3 src/00-load_data.py --dataset midas/ldkp10k --subset small
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--dataset", type=str, required=True)
