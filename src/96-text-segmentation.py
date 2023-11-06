@@ -37,8 +37,8 @@ def activate_similarities(similarities:np.array, p_size=10)->np.array:
     return activated_similarities
 
 def main():
-    dataset_name = "kptimes"
-    id = "ny0001061"
+    dataset_name = "openkp"
+    id = "sample-temp"
     with open(f"output/midas/{dataset_name}/{id}.txt", "r") as f:
         doc = f.readlines()
 
