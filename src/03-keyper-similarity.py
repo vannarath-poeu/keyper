@@ -126,6 +126,12 @@ def keyper_score(
             # doc = " ".join([s for s in sections])
             abstractive_keyphrases = test[i]["abstractive_keyphrases"]
             extractive_keyphrases = test[i]["extractive_keyphrases"]
+        elif dataset_name in ["vannarathp/segmented-kptimes", "vannarathp/segmented-openkp"]:
+            sections = []
+            for section in test[i]["document"]:
+                sections.append(" ".join(section))
+            abstractive_keyphrases = test[i]["abstractive_keyphrases"]
+            extractive_keyphrases = test[i]["extractive_keyphrases"]
         else:
             raise NotImplementedError
 
@@ -235,6 +241,8 @@ def keyper_score(
 
 if __name__ == "__main__":
     # Example: python3 src/03-keyper-similarity.py --dataset midas/ldkp3k
+    # Or python3 src/03-keyper-similarity.py --dataset vannarathp/segmented-kptimes
+    # Or python3 src/03-keyper-similarity.py --dataset vannarathp/segmented-openkp
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--dataset", type=str, required=True)

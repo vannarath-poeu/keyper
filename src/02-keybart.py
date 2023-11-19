@@ -67,6 +67,13 @@ def keybart_score(
             doc = " ".join([s for s in sections])
             abstractive_keyphrases = test[i]["abstractive_keyphrases"]
             extractive_keyphrases = test[i]["extractive_keyphrases"]
+        elif dataset_name in ["vannarathp/segmented-kptimes", "vannarathp/segmented-openkp"]:
+            sections = []
+            for section in test[i]["document"]:
+                sections.append(" ".join(section))
+            doc = " ".join([s for s in sections])
+            abstractive_keyphrases = test[i]["abstractive_keyphrases"]
+            extractive_keyphrases = test[i]["extractive_keyphrases"]
         else:
             raise NotImplementedError
 
@@ -113,6 +120,8 @@ if __name__ == "__main__":
     # Or python3 src/02-keybart.py --dataset midas/semeval2010
     # Or python3 src/02-keybart.py --dataset midas/nus
     # Or python3 src/02-keybart.py --dataset midas/krapivin
+    # Or python3 src/02-keybart.py --dataset vannarathp/segmented-kptimes
+    # Or python3 src/02-keybart.py --dataset vannarathp/segmented-openkp
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--dataset", type=str, required=True)
