@@ -12,10 +12,11 @@ def keybart_score(
     dataset_name: str,
     data_path: str,
     output_path: str,
+    split: str,
 ):
     # Load dataset
     dataset_path = f"{data_path}/{dataset_name}"
-    test_jsonl = f"{dataset_path}/test.jsonl"
+    test_jsonl = f"{dataset_path}/{split}.jsonl"
 
     assert os.path.exists(test_jsonl), f"File {test_jsonl} does not exist"
 
@@ -109,8 +110,8 @@ def keybart_score(
     for k in results.keys():
         for score in results[k].keys():
             results[k][score] /= num_docs
-    json.dump(results, open(f"{dataset_output_path}/keybart.json", "w"), indent=4)
-    json.dump(predictions, open(f"{dataset_output_path}/keybart-preds.json", "w"), indent=4)
+    json.dump(results, open(f"{dataset_output_path}/keybart={split}.json", "w"), indent=4)
+    json.dump(predictions, open(f"{dataset_output_path}/keybart-preds-{split}.json", "w"), indent=4)
 
 
 if __name__ == "__main__":
@@ -127,11 +128,13 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--data", type=str, default="data")
     parser.add_argument("--output", type=str, default="output")
+    parser.add_argument("--split", type=str, default="test")
 
     args = parser.parse_args()
     # Get all the variables
     dataset_name = args.dataset
     data_path = args.data
     output_path = args.output
+    split = args.split
 
-    keybart_score(dataset_name, data_path, output_path)
+    keybart_score(dataset_name, data_path, output_path, split)
