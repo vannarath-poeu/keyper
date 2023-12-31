@@ -110,7 +110,7 @@ def keybart_score(
     for k in results.keys():
         for score in results[k].keys():
             results[k][score] /= num_docs
-    json.dump(results, open(f"{dataset_output_path}/keybart={split}.json", "w"), indent=4)
+    json.dump(results, open(f"{dataset_output_path}/keybart-{split}.json", "w"), indent=4)
     json.dump(predictions, open(f"{dataset_output_path}/keybart-preds-{split}.json", "w"), indent=4)
 
 
