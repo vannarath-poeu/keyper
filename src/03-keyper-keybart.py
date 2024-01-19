@@ -40,10 +40,11 @@ def keyper_score(
     dataset_name: str,
     data_path: str,
     output_path: str,
+    split: str,
 ):
     # Load dataset
     dataset_path = f"{data_path}/{dataset_name}"
-    test_jsonl = f"{dataset_path}/test.jsonl"
+    test_jsonl = f"{dataset_path}/{split}.jsonl"
 
     assert os.path.exists(test_jsonl), f"File {test_jsonl} does not exist"
 
@@ -72,11 +73,13 @@ def keyper_score(
     model_name = "bloomberg/KeyBART"
     generator = KeyphraseGenerationPipeline(model_name=model_name, truncation=True)
 
+    all_keywords = {}
+
     for i in range(num_docs):
         test[i] = json.loads(test[i])
 
         # Dataset specific
-        if dataset_name == "midas/ldkp3k":
+        if dataset_name in ["midas/ldkp3k", "vannarathp/segmented-ldkp"]:
             sections = []
             for j, section in enumerate(test[i]["sections"]):
                 if section.lower() != "abstract" and section.lower() != "title":
@@ -84,10 +87,21 @@ def keyper_score(
             # doc = " ".join([s for s in sections])
             abstractive_keyphrases = test[i]["abstractive_keyphrases"]
             extractive_keyphrases = test[i]["extractive_keyphrases"]
+        elif dataset_name in ["vannarathp/segmented-kptimes", "vannarathp/segmented-openkp"]:
+            sections = []
+            for j, section in enumerate(test[i]["document"]):
+                sections.append(" ".join(section))
+            # doc = " ".join([s for s in sections])
+            abstractive_keyphrases = test[i]["abstractive_keyphrases"]
+            extractive_keyphrases = test[i]["extractive_keyphrases"]
         else:
             raise NotImplementedError
 
         section_keywords = keybart_list(generator, sections, top_n=10)
+
+        all_keywords[i] = section_keywords
+
+        json.dump(all_keywords, open(f"{dataset_output_path}/keyper-keybart-keywords-{split}.json", "w"))
 
         if sum([len(kw) for kw in section_keywords]) == 0:
             print(f"Skipping {i} as no keywords found")
@@ -153,13 +167,11 @@ def keyper_score(
                 G.add_edge((si, sj), sink_node, capacity=10_000)
             break
 
-        max_flow_value, flow_dict = nx.maximum_flow(G, source_node, sink_node)
+        _, flow_dict = nx.maximum_flow(G, source_node, sink_node)
         node_scores = {k: sum([score for _, score in flow_dict[k].items()]) for k in flow_dict if k not in [source_node, sink_node]}
 
         predicted_keyphrases = rank_keywords(node_scores, section_keywords, top_n=10)
         predictions.append(predicted_keyphrases)
-
-        # print(abstractive_keyphrases, extractive_keyphrases)
 
         abstractive_keyphrases = stem_keywords(abstractive_keyphrases)
         extractive_keyphrases = stem_keywords(extractive_keyphrases)
@@ -193,22 +205,27 @@ def keyper_score(
             for score in temp[k].keys():
                 temp[k][score] /= (i+1)
         temp["num_docs"] = i+1
-        json.dump(temp, open(f"{dataset_output_path}/keyper-keybart.json", "w"), indent=4)
-        json.dump(predictions, open(f"{dataset_output_path}/keyper-keybart-preds.json", "w"), indent=4)
+        json.dump(temp, open(f"{dataset_output_path}/keyper-keybart-{split}.json", "w"), indent=4)
+        json.dump(predictions, open(f"{dataset_output_path}/keyper-keybart-preds-{split}.json", "w"), indent=4)
 
 
 if __name__ == "__main__":
     # Example: python3 src/03-keyper-keybart.py --dataset midas/ldkp3k
+    # Or: python3 src/03-keyper-keybart.py --dataset vannarathp/segmented-ldkp
+    # Or: python3 src/03-keyper-keybart.py --dataset vannarathp/segmented-kptimes
+    # Or: python3 src/03-keyper-keybart.py --dataset vannarathp/segmented-openkp
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--data", type=str, default="data")
     parser.add_argument("--output", type=str, default="output")
+    parser.add_argument("--split", type=str, default="test")
 
     args = parser.parse_args()
     # Get all the variables
     dataset_name = args.dataset
     data_path = args.data
     output_path = args.output
+    split = args.split
 
-    keyper_score(dataset_name, data_path, output_path)
+    keyper_score(dataset_name, data_path, output_path, split)
