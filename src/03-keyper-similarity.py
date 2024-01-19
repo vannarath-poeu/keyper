@@ -84,10 +84,11 @@ def keyper_score(
     dataset_name: str,
     data_path: str,
     output_path: str,
+    split: str,
 ):
     # Load dataset
     dataset_path = f"{data_path}/{dataset_name}"
-    test_jsonl = f"{dataset_path}/test.jsonl"
+    test_jsonl = f"{dataset_path}/{split}.jsonl"
 
     assert os.path.exists(test_jsonl), f"File {test_jsonl} does not exist"
 
@@ -104,21 +105,27 @@ def keyper_score(
             "precision@10": 0,
             "recall@10": 0,
             "fscore@10": 0,
+            "precision@M": 0,
+            "recall@M": 0,
+            "fscore@M": 0,
         }
         for k in ["abstractive", "extractive", "combined"]
     }
 
     num_docs = len(test)
+    skipped_docs = 0
     predictions = []
 
     # Init model
     kw_model = KeyBERT(model="microsoft/MiniLM-L12-H384-uncased")
 
+    all_keywords = {}
+
     for i in range(num_docs):
         test[i] = json.loads(test[i])
 
         # Dataset specific
-        if dataset_name == "midas/ldkp3k":
+        if dataset_name in ["midas/ldkp3k", "vannarathp/segmented-ldkp"]:
             sections = []
             for j, section in enumerate(test[i]["sections"]):
                 if section.lower() != "abstract":
@@ -136,6 +143,10 @@ def keyper_score(
             raise NotImplementedError
 
         section_keywords = extract_keywords(kw_model, sections)
+
+        all_keywords[i] = [[kw for kw, _ in sk] for sk in section_keywords]
+
+        json.dump(all_keywords, open(f"{dataset_output_path}/keyper-similarity-keywords-{split}.json", "w"))
 
         keyword_pair_similarity = {}
         for si in range(len(sections)):
@@ -197,7 +208,12 @@ def keyper_score(
                 G.add_edge((si, sj), sink_node, capacity=10_000)
             break
 
-        max_flow_value, flow_dict = nx.maximum_flow(G, source_node, sink_node)
+        try:
+            _, flow_dict = nx.maximum_flow(G, source_node, sink_node)
+        except:
+            skipped_docs += 1
+            print(f"Document {i} has unbounded flow, skipping...")
+            continue
         node_scores = {k: sum([score for _, score in flow_dict[k].items()]) for k in flow_dict if k not in [source_node, sink_node]}
 
         predicted_keyphrases = rank_keywords(node_scores, section_keywords, top_n=10)
@@ -227,32 +243,60 @@ def keyper_score(
             results["combined"][f"recall@{k}"] += r
             results["combined"][f"fscore@{k}"] += f
         
+        for k in ["M"]:
+            len_keyphrases = len(abstractive_keyphrases)
+            p, r, f = evaluate(predicted_keyphrases[:len_keyphrases], abstractive_keyphrases)
+            results["abstractive"][f"precision@{k}"] += p
+            results["abstractive"][f"recall@{k}"] += r
+            results["abstractive"][f"fscore@{k}"] += f
+
+        for k in ["M"]:
+            len_keyphrases = len(extractive_keyphrases)
+            p, r, f = evaluate(predicted_keyphrases[:len_keyphrases], extractive_keyphrases)
+            results["extractive"][f"precision@{k}"] += p
+            results["extractive"][f"recall@{k}"] += r
+            results["extractive"][f"fscore@{k}"] += f
+
+        for k in ["M"]:
+            len_keyphrases = len(combined_keyphrases)
+            p, r, f = evaluate(predicted_keyphrases[:len_keyphrases], combined_keyphrases)
+            results["combined"][f"precision@{k}"] += p
+            results["combined"][f"recall@{k}"] += r
+            results["combined"][f"fscore@{k}"] += f
+        
         print(f"Processed {i+1} documents", end="\r")
+
+        processed_docs = i - skipped_docs + 1
 
         temp = copy.deepcopy(results)
 
         for k in temp.keys():
             for score in temp[k].keys():
-                temp[k][score] /= (i+1)
-        temp["num_docs"] = i+1
-        json.dump(temp, open(f"{dataset_output_path}/keyper-similarity.json", "w"), indent=4)
-        json.dump(predictions, open(f"{dataset_output_path}/keyper-similarity-preds.json", "w"), indent=4)
+                temp[k][score] /= (processed_docs)
+
+        temp["num_docs"] = processed_docs
+        temp["skipped_docs"] = skipped_docs
+        json.dump(temp, open(f"{dataset_output_path}/keyper-similarity-{split}.json", "w"), indent=4)
+        json.dump(predictions, open(f"{dataset_output_path}/keyper-similarity-preds-{split}.json", "w"), indent=4)
 
 
 if __name__ == "__main__":
     # Example: python3 src/03-keyper-similarity.py --dataset midas/ldkp3k
     # Or python3 src/03-keyper-similarity.py --dataset vannarathp/segmented-kptimes
     # Or python3 src/03-keyper-similarity.py --dataset vannarathp/segmented-openkp
+    # Or python3 src/03-keyper-similarity.py --dataset vannarathp/segmented-ldkp
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--data", type=str, default="data")
     parser.add_argument("--output", type=str, default="output")
+    parser.add_argument("--split", type=str, default="test")
 
     args = parser.parse_args()
     # Get all the variables
     dataset_name = args.dataset
     data_path = args.data
     output_path = args.output
+    split = args.split
 
-    keyper_score(dataset_name, data_path, output_path)
+    keyper_score(dataset_name, data_path, output_path, split)
