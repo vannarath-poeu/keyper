@@ -27,10 +27,14 @@ if __name__ == "__main__":
     # Or python3 src/00-load_data.py --dataset midas/kptimes --subset raw
     # Or python3 src/00-load_data.py --dataset midas/openkp --subset raw
     # Or python3 src/00-load_data.py --dataset midas/ldkp10k --subset small
+    # Or python3 src/00-load_data.py --dataset vannarathp/segmented-kptimes
+    # Or python3 src/00-load_data.py --dataset vannarathp/segmented-ldkp
+    # Or python3 src/00-load_data.py --dataset vannarathp/segmented-openkp
+    
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--dataset", type=str, required=True)
-    parser.add_argument("--subset", type=str, required=True)
+    parser.add_argument("--subset", type=str, default=None)
     parser.add_argument("--output", type=str, default="data")
     parser.add_argument("--splits", type=str, default=None)
 
