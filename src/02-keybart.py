@@ -13,6 +13,7 @@ def keybart_score(
     data_path: str,
     output_path: str,
     split: str,
+    text: str,
 ):
     # Load dataset
     dataset_path = f"{data_path}/{dataset_name}"
@@ -41,7 +42,9 @@ def keybart_score(
     }
 
     num_docs = len(test)
+    skipped_docs = 0
     predictions = []
+    text_prefix = "-abstract" if text == "abstract" else ""
 
     model_name = "bloomberg/KeyBART"
     generator = KeyphraseGenerationPipeline(model_name=model_name, truncation=True)
@@ -73,6 +76,21 @@ def keybart_score(
             for section in test[i]["document"]:
                 sections.append(" ".join(section))
             doc = " ".join([s for s in sections])
+            abstractive_keyphrases = test[i]["abstractive_keyphrases"]
+            extractive_keyphrases = test[i]["extractive_keyphrases"]
+        elif dataset_name in ["vannarathp/segmented-ldkp"]:
+            if text == "abstract":
+                if "metadata" in test[i] and "abstract" in test[i]["metadata"] and test[i]["metadata"]["abstract"] is not None:
+                    doc = " ".join(test[i]["metadata"]["abstract"])
+                else:
+                    skipped_docs += 1
+                    print(f"Document {i} does not have abstract, skipping...")
+                    continue
+            else:
+                sections = []
+                for section in test[i]["sec_text"]:
+                    sections.append(" ".join(section))
+                doc = " ".join([s for s in sections])
             abstractive_keyphrases = test[i]["abstractive_keyphrases"]
             extractive_keyphrases = test[i]["extractive_keyphrases"]
         else:
@@ -109,9 +127,10 @@ def keybart_score(
 
     for k in results.keys():
         for score in results[k].keys():
-            results[k][score] /= num_docs
-    json.dump(results, open(f"{dataset_output_path}/keybart-{split}.json", "w"), indent=4)
-    json.dump(predictions, open(f"{dataset_output_path}/keybart-preds-{split}.json", "w"), indent=4)
+            results[k][score] /= (num_docs - skipped_docs)
+    results["num_docs"] = (num_docs - skipped_docs)
+    json.dump(results, open(f"{dataset_output_path}/keybart-{split}{text_prefix}.json", "w"), indent=4)
+    json.dump(predictions, open(f"{dataset_output_path}/keybart-preds-{split}{text_prefix}.json", "w"), indent=4)
 
 
 if __name__ == "__main__":
@@ -123,12 +142,15 @@ if __name__ == "__main__":
     # Or python3 src/02-keybart.py --dataset midas/krapivin
     # Or python3 src/02-keybart.py --dataset vannarathp/segmented-kptimes
     # Or python3 src/02-keybart.py --dataset vannarathp/segmented-openkp
+    # Or python3 src/02-keybart.py --dataset vannarathp/segmented-ldkp
+    # Or python3 src/02-keybart.py --dataset vannarathp/segmented-ldkp --text abstract
     parser = argparse.ArgumentParser()
     # Add list of arguments
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--data", type=str, default="data")
     parser.add_argument("--output", type=str, default="output")
     parser.add_argument("--split", type=str, default="test")
+    parser.add_argument("--text", type=str, default="document")
 
     args = parser.parse_args()
     # Get all the variables
@@ -136,5 +158,6 @@ if __name__ == "__main__":
     data_path = args.data
     output_path = args.output
     split = args.split
+    text = args.text
 
-    keybart_score(dataset_name, data_path, output_path, split)
+    keybart_score(dataset_name, data_path, output_path, split, text)
