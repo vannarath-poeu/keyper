@@ -37,6 +37,9 @@ def keybart_score(
             "precision@10": 0,
             "recall@10": 0,
             "fscore@10": 0,
+            "precision@M": 0,
+            "recall@M": 0,
+            "fscore@M": 0,
         }
         for k in ["abstractive", "extractive", "combined"]
     }
@@ -119,6 +122,27 @@ def keybart_score(
 
         for k in [5, 10]:
             p, r, f = evaluate(predicted_keyphrases[:k], combined_keyphrases)
+            results["combined"][f"precision@{k}"] += p
+            results["combined"][f"recall@{k}"] += r
+            results["combined"][f"fscore@{k}"] += f
+        
+        for k in ["M"]:
+            len_keyphrases = len(abstractive_keyphrases)
+            p, r, f = evaluate(predicted_keyphrases[:len_keyphrases], abstractive_keyphrases)
+            results["abstractive"][f"precision@{k}"] += p
+            results["abstractive"][f"recall@{k}"] += r
+            results["abstractive"][f"fscore@{k}"] += f
+
+        for k in ["M"]:
+            len_keyphrases = len(extractive_keyphrases)
+            p, r, f = evaluate(predicted_keyphrases[:len_keyphrases], extractive_keyphrases)
+            results["extractive"][f"precision@{k}"] += p
+            results["extractive"][f"recall@{k}"] += r
+            results["extractive"][f"fscore@{k}"] += f
+
+        for k in ["M"]:
+            len_keyphrases = len(combined_keyphrases)
+            p, r, f = evaluate(predicted_keyphrases[:len_keyphrases], combined_keyphrases)
             results["combined"][f"precision@{k}"] += p
             results["combined"][f"recall@{k}"] += r
             results["combined"][f"fscore@{k}"] += f
