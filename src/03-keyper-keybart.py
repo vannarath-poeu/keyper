@@ -61,6 +61,9 @@ def keyper_score(
             "precision@10": 0,
             "recall@10": 0,
             "fscore@10": 0,
+            "precision@M": 0,
+            "recall@M": 0,
+            "fscore@M": 0,
         }
         for k in ["abstractive", "extractive", "combined"]
     }
@@ -74,6 +77,16 @@ def keyper_score(
     generator = KeyphraseGenerationPipeline(model_name=model_name, truncation=True)
 
     all_keywords = {}
+
+    all_keywords_jsonl = f"{dataset_output_path}/keyper-keybart-keywords-{split}.json"
+    with open(all_keywords_jsonl, "r") as f:
+        all_keywords = json.load(f)
+    
+    keyphrases_jsonl = f"{dataset_output_path}/keyper-keybart-preds-{split}.json"
+    with open(keyphrases_jsonl, "r") as f:
+        keyphrase_list = json.load(f)
+    
+    skipped_docs = 0
 
     for i in range(num_docs):
         test[i] = json.loads(test[i])
@@ -105,6 +118,8 @@ def keyper_score(
 
         if sum([len(kw) for kw in section_keywords]) == 0:
             print(f"Skipping {i} as no keywords found")
+            predictions.append([])
+            skipped_docs += 1
             continue
 
         keyword_pair_similarity = {}
@@ -197,14 +212,35 @@ def keyper_score(
             results["combined"][f"recall@{k}"] += r
             results["combined"][f"fscore@{k}"] += f
         
+        for k in ["M"]:
+            len_keyphrases = len(abstractive_keyphrases)
+            p, r, f = evaluate(predicted_keyphrases[:len_keyphrases], abstractive_keyphrases)
+            results["abstractive"][f"precision@{k}"] += p
+            results["abstractive"][f"recall@{k}"] += r
+            results["abstractive"][f"fscore@{k}"] += f
+
+        for k in ["M"]:
+            len_keyphrases = len(extractive_keyphrases)
+            p, r, f = evaluate(predicted_keyphrases[:len_keyphrases], extractive_keyphrases)
+            results["extractive"][f"precision@{k}"] += p
+            results["extractive"][f"recall@{k}"] += r
+            results["extractive"][f"fscore@{k}"] += f
+
+        for k in ["M"]:
+            len_keyphrases = len(combined_keyphrases)
+            p, r, f = evaluate(predicted_keyphrases[:len_keyphrases], combined_keyphrases)
+            results["combined"][f"precision@{k}"] += p
+            results["combined"][f"recall@{k}"] += r
+            results["combined"][f"fscore@{k}"] += f
+        
         print(f"Processed {i+1} documents", end="\r")
 
         temp = copy.deepcopy(results)
 
         for k in temp.keys():
             for score in temp[k].keys():
-                temp[k][score] /= (i+1)
-        temp["num_docs"] = i+1
+                temp[k][score] /= (i+1 - skipped_docs)
+        temp["num_docs"] = i+1 - skipped_docs
         json.dump(temp, open(f"{dataset_output_path}/keyper-keybart-{split}.json", "w"), indent=4)
         json.dump(predictions, open(f"{dataset_output_path}/keyper-keybart-preds-{split}.json", "w"), indent=4)
 
