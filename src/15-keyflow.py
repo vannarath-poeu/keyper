@@ -1,19 +1,15 @@
 import argparse
-import pathlib
 import os
 import json
-import pyomo.environ as pyo
-from collections import defaultdict
 import networkx as nx
 import copy
 from typing import List, Any
 import multiprocessing
-from multiprocessing import Pool
+from multiprocessing import Pool, cpu_count
 from functools import partial
 from datetime import datetime
 
 import chromadb
-from chromadb.db.base import UniqueConstraintError
 from chromadb.utils import embedding_functions
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -127,108 +123,6 @@ def update_score(
             temp[keyphrase_type][f"fscore@{k}"] += f
     return temp
 
-# def pyomo_max_flow():
-#     model = pyo.ConcreteModel("max_flow")
-
-#     # nodes
-#     nodes = set(["source", "sink", "early_exit"])
-#     # edges
-#     edges = defaultdict(float)
-
-#     add_source = True
-#     for si, _ in enumerate(section_keywords):
-#         if len(section_keywords[si]) < 1:
-#             continue
-#         for sj, kw1 in enumerate(section_keywords[si]):
-#             node_1 = f"{si}_{sj}_{kw1}"
-#             nodes.add(node_1)
-#             result_kw1 = collection.get(f"kw_{idx}_{si}_{sj}", include=["embeddings", "documents"])
-#             kw1_embedding = result_kw1["embeddings"][0]
-#             if add_source:
-#                 edges[("source", node_1)] = 10_000
-#             if si + 1 < num_sections:
-#                 for sk, kw2 in enumerate(section_keywords[si + 1]):
-#                     node_2 = f"{si + 1}_{sk}_{kw2}"
-#                     result_kw2 = collection.get(f"kw_{idx}_{si + 1}_{sk}", include=["embeddings", "documents"])
-#                     kw2_embedding = result_kw2["embeddings"][0]
-#                     similarity = cosine_similarity(
-#                         [kw1_embedding],
-#                         [kw2_embedding],
-#                     )[0][0]
-#                     edges[(node_1, node_2)] = similarity
-#             if si + 2 < num_sections:
-#                 for sk, kw2 in enumerate(section_keywords[si + 2]):
-#                     node_2 = f"{si + 2}_{sk}_{kw2}"
-#                     result_kw2 = collection.get(f"kw_{idx}_{si + 2}_{sk}", include=["embeddings", "documents"])
-#                     kw2_embedding = result_kw2["embeddings"][0]
-#                     similarity = cosine_similarity(
-#                         [kw1_embedding],
-#                         [kw2_embedding]
-#                     )[0][0]
-#                     edges[(node_1, node_2)] = similarity
-#         add_source = False
-
-#     sink_node = "sink"
-#     for si in reversed(range(num_sections)):
-#         if len(section_keywords[si]) < 1:
-#             continue
-#         for sj, w1 in enumerate(section_keywords[si]):
-#             kw1 = w1[0]
-#             node_1 = f"{si}_{sj}_{kw1}"
-#             edges[node_1, sink_node] = 10_000
-#         else:
-#             sink_node = "early_exit"
-    
-#     nodes = list(nodes)
-#     node_products = [(s, t) for s in nodes for t in nodes]
-
-
-#     model.f = pyo.Var(node_products, domain=pyo.NonNegativeReals)
-
-#     # Maximize the flow into the sink nodes
-#     def total_rule(model):
-#         return sum(model.f[n] for n in node_products)
-
-#     # Enforce an upper limit on the flow across each edge
-#     def limit_rule(model, s, e):
-#         return model.f[(s, e)] <= edges.get((s, e), 0)
-
-#     # Enforce flow through each node
-#     def flow_rule(model, node):
-#         if node == "source" or node == "sink" or node == "early_exit":
-#             return pyo.Constraint.Skip
-#         inFlow  = sum(model.f[(source, node)] for source in nodes)
-#         outFlow = sum(model.f[(node, dest)] for dest in nodes)
-#         return inFlow == outFlow
-
-#     model.total = pyo.Objective(rule=total_rule, sense=pyo.maximize)
-#     model.limit = pyo.Constraint(nodes, nodes, rule=limit_rule)
-#     model.flow = pyo.Constraint(nodes, rule=flow_rule)
-
-#     # solver = pyo.SolverFactory('glpk')  # "glpk"
-#     solver = pyo.SolverFactory('cbc')  # "cbc"
-
-#     res = solver.solve(model)
-
-#     pyo.assert_optimal_termination(res)
-
-#     keyword_scores = defaultdict(float)
-#     for val in model.f:
-#         score = model.f[val].value
-#         if score is None or score <= 0:
-#             continue
-#         node1, node2 = val
-#         if node1 == "source" or node2 == "early_exit":
-#             continue
-#         _, _, kw1 = node1.split("_")
-#         # _, _, kw2 = node2.split("_")
-#         keyword_scores[kw1] += score
-    
-#     print(keyword_scores)
-    
-#     # predicted_keyphrases = sorted(keyword_scores, key=keyword_scores.get, reverse=True)[:10]
-#     predicted_keyphrases = rank_keywords(keyword_scores, top_n=10)
-
 def process_record(
     idx: int,
     dataset_name: str,
@@ -237,6 +131,7 @@ def process_record(
     collection: Any,
     experiment: str,
     results: Any,
+    alpha: float,
 ):
     # Load record into JSON format
         record = json.loads(dataset[idx])
@@ -280,7 +175,7 @@ def process_record(
 
         keyword_pair_similarity = {}
         for si in range(num_sections):
-            section_similarity = 1.0
+            section_similarity = 0
             if si + 1 < num_sections:
                 keyword_1 = section_keywords[si]
                 keyword_2 = section_keywords[si + 1]
@@ -306,7 +201,7 @@ def process_record(
                         keyword_pair_similarity[(e1, e2)] = cosine_similarity(
                             [emb_1],
                             [emb_2]
-                        )[0][0] * section_similarity
+                        )[0][0] + alpha * section_similarity
             if si + 2 < num_sections:
                 keyword_1 = section_keywords[si]
                 keyword_2 = section_keywords[si + 2]
@@ -332,7 +227,7 @@ def process_record(
                         keyword_pair_similarity[(e1, e2)] = cosine_similarity(
                             [emb_1],
                             [emb_2]
-                        )[0][0] * section_similarity
+                        )[0][0] + alpha * section_similarity
         
         # Create graph and nodes
         G = nx.DiGraph()
@@ -426,6 +321,7 @@ def process_chunk(
     split: str = "",
     all_keyword_dict: Any = {},
     output_path: str = "",
+    alpha=1.5,
 ):
     results = init_score()
     processed_docs = 0
@@ -454,6 +350,7 @@ def process_chunk(
             collection,
             experiment,
             results,
+            alpha,
         )
         skipped_docs += response["skipped_docs"]
         processed_docs += (1 - response["skipped_docs"])
@@ -473,6 +370,7 @@ def max_flow(
     output_path: str,
     split: str,
     experiment: str,
+    alpha: float,
 ):
     dataset = load_dataset(
         dataset_name,
@@ -490,7 +388,8 @@ def max_flow(
 
     multiprocessing.set_start_method('spawn')
 
-    num_cpu = 4
+    num_cpu = cpu_count()
+    print(f"Using {num_cpu} CPUs")
     pool = Pool(num_cpu)
     chunk_list = list(chunks(range(0, num_records), num_records // num_cpu + 1))
     score_file_list = pool.map(
@@ -502,6 +401,7 @@ def max_flow(
             experiment=experiment,
             split=split,
             output_path=output_path,
+            alpha=alpha,
         ),
         chunk_list,
     )
@@ -562,6 +462,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=str, default="output")
     parser.add_argument("--split", type=str, default="test")
     parser.add_argument("--experiment", type=str, default="original")
+    parser.add_argument("--alpha", type=float, default=1.5)
 
     args = parser.parse_args()
     # Get all the variables
@@ -570,6 +471,7 @@ if __name__ == "__main__":
     output_path = args.output
     split = args.split
     experiment = args.experiment
+    alpha = args.alpha
 
     max_flow(
         dataset_name,
@@ -577,4 +479,5 @@ if __name__ == "__main__":
         output_path,
         split,
         experiment,
+        alpha,
     )
