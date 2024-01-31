@@ -327,21 +327,31 @@ def process_chunk(
     processed_docs = 0
     skipped_docs = 0
 
-    # ChromaDB for each dataset
-    client = chromadb.PersistentClient(path="keyflow/")
-    em = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="microsoft/MiniLM-L12-H384-uncased")
+    score_file_name = f"{output_path}/{dataset_name}/keyflow-{experiment}-{split}-scores-{chunk_list[0]}-{chunk_list[-1]}.json"
+    pred_file_name = f"{output_path}/{dataset_name}/keyflow-{experiment}-{split}-preds-{chunk_list[0]}-{chunk_list[-1]}.json"
+
+    # Resume capability
+    start_idx = 0
+    if os.path.exists(score_file_name):
+        results = json.load(open(score_file_name, "r"))
+        start_idx = results["num_docs"]
+        print(f"Resuming from {start_idx}...")
+        del results["num_docs"]
 
     collection_name = dataset_name.split("/")[-1]
+
+    # ChromaDB for each dataset
+    client = chromadb.PersistentClient(path=f"chroma/keyflow-{collection_name}-{chunk_list[0]}-{chunk_list[-1]}/")
+    em = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="microsoft/MiniLM-L12-H384-uncased")
+
     try:
         collection = client.create_collection(name=collection_name, embedding_function=em)
     except:
         collection = client.get_collection(name=collection_name, embedding_function=em)
 
     predictions = []
-    score_file_name = f"{output_path}/{dataset_name}/keyflow-{experiment}-{split}-scores-{chunk_list[0]}-{chunk_list[-1]}.json"
-    pred_file_name = f"{output_path}/{dataset_name}/keyflow-{experiment}-{split}-preds-{chunk_list[0]}-{chunk_list[-1]}.json"
 
-    for idx in chunk_list:
+    for idx in chunk_list[start_idx:]:
         response = process_record(
             idx,
             dataset_name,
@@ -359,7 +369,7 @@ def process_chunk(
 
         temp = copy.deepcopy(results)
 
-        temp["num_docs"] = (processed_docs - skipped_docs)
+        temp["num_docs"] = (start_idx + processed_docs - skipped_docs)
         json.dump(temp, open(score_file_name, "w"), indent=4)
         json.dump(predictions, open(pred_file_name, "w"), indent=4)
     return score_file_name
